@@ -1,6 +1,27 @@
-# Üniversite Yemekhanesi Süreç Optimizasyonu ve Simülasyonu Projesi
+<div align="center">
 
-![Proje Kapağı](Proje_Kapagi.png)
+### T.C.<br>MERSİN ÜNİVERSİTESİ<br>ERDEMLİ UYGULAMALI TEKNOLOJİ VE İŞLETMECİLİK YÜKSEKOKULU
+*Bilişim Sistemleri ve Teknolojileri / Yönetim Bilişim Sistemleri*
+
+<br><br>
+
+# YEMEKHANE SİMÜLASYONU VE SÜREÇ OPTİMİZASYONU
+### Ayrık Olay Simülasyonu (Discrete-Event Simulation) ve Kuyruk Teorisi Analiz Raporu
+
+<br><br>
+
+**Hazırlayan**<br>
+**Ad Soyad:** Hüseyin Karakoç<br>
+**Öğrenci No:** 22430070027<br>
+**Proje GitHub Deposu:** [https://github.com/Krkc46/simulasyon](https://github.com/Krkc46/simulasyon)
+
+<br><br>
+
+**Mersin - 2026**
+
+</div>
+
+---
 
 ## 1. Projenin Amacı ve Kapsamı
 Bu projenin temel amacı, bir üniversite yemekhanesindeki öğrenci akışının ve hizmet noktalarının yoğunluk durumunu analiz etmektir. Belirli bir zaman dilimi içinde (standart bir öğle arası olan 120 dakika) kuyruk teorisinin pratikte nasıl uygulandığını gözlemlemek ve darboğaz (bottleneck) oluşan noktaları tespit ederek parametrelere dayalı kapasite planlaması yapmaktır.

@@ -13,6 +13,8 @@ config = {
     'NUM_SERVERS': 4,
     'NUM_CASHIERS': 1,
     'SEATING_CAPACITY': 15,
+    'NUM_TURNSTILES': 2,
+    'NUM_DISH_RETURNS': 2,
     'SIM_TIME': 120,
     'ARRIVAL_MEAN': 1.0,
     'SERVING_MEAN': 3.0,
@@ -21,15 +23,48 @@ config = {
     'EATING_MEAN': 20.0,
 }
 
+# Zaman dilimine göre varış yoğunluğu çarpanları
+# (başlangıç_dk, bitiş_dk, çarpan, dönem_adı, renk_kodu)
+TIME_PERIODS = [
+    (0,   15,  0.3,  "🟢 Erken Saatler",   "#55efc4"),
+    (15,  45,  2.5,  "🔴 Pik Yoğunluk",    "#e94560"),
+    (45,  80,  1.0,  "🟡 Normal Akış",      "#ffd369"),
+    (80,  100, 0.5,  "🟠 Azalan Dönem",     "#fdcb6e"),
+    (100, 120, 0.15, "🔵 Kapanış Saati",    "#a29bfe"),
+]
+
+def get_current_period(now):
+    """Simülasyon zamanına göre aktif zaman dilimini döndürür"""
+    for start, end, factor, name, color in TIME_PERIODS:
+        if start <= now < end:
+            return factor, name, color
+    return 1.0, "🟡 Normal Akış", "#ffd369"
+
 # GUI için anlık durumu tutan global sözlük
 state = {
+    'tu_queue': 0, 'tu_active': 0,
     's_queue': 0, 's_active': 0,
     'c_queue': 0, 'c_active': 0,
     't_queue': 0, 't_active': 0,
+    'd_queue': 0, 'd_active': 0,
     'total_in': 0, 'total_out': 0,
     'current_time': 0.0,
     'is_finished': False,
     'sim_started': False,
+    # Aktif zaman dilimi bilgileri
+    'current_period_name': '🟢 Erken Saatler',
+    'current_period_color': '#55efc4',
+    'current_period_factor': 0.3,
+    # Dönem bazlı öğrenci sayaçları
+    'period_counts': {p[3]: 0 for p in TIME_PERIODS},
+    # Olay günlüğü (son olaylar)
+    'event_log': [],
+    # Yeni eklenen özellikler: VIP, Ciro, Mola
+    'total_student': 0,
+    'total_staff': 0,
+    'total_revenue': 0.0,
+    'break_server': 0,
+    'break_cashier': 0,
     # Zaman serisi verileri (istatistik grafikleri için)
     'history': {
         'time': [],
@@ -42,19 +77,37 @@ state = {
     }
 }
 
+MAX_LOG_ENTRIES = 50  # Bellekte tutulacak max olay sayısı
+
 def reset_state():
     """State'i sıfırla (yeni simülasyon için)"""
+    state['tu_queue'] = 0
+    state['tu_active'] = 0
     state['s_queue'] = 0
     state['s_active'] = 0
     state['c_queue'] = 0
     state['c_active'] = 0
     state['t_queue'] = 0
     state['t_active'] = 0
+    state['d_queue'] = 0
+    state['d_active'] = 0
     state['total_in'] = 0
     state['total_out'] = 0
     state['current_time'] = 0.0
     state['is_finished'] = False
     state['sim_started'] = False
+    state['current_period_name'] = '🟢 Erken Saatler'
+    state['current_period_color'] = '#55efc4'
+    state['current_period_factor'] = 0.3
+    state['period_counts'] = {p[3]: 0 for p in TIME_PERIODS}
+    state['event_log'] = []
+    
+    state['total_student'] = 0
+    state['total_staff'] = 0
+    state['total_revenue'] = 0.0
+    state['break_server'] = 0
+    state['break_cashier'] = 0
+
     state['history'] = {
         'time': [],
         's_queue_hist': [],
@@ -65,54 +118,159 @@ def reset_state():
         't_active_hist': [],
     }
 
+def add_event(time, student_id, station, action, icon="🟢"):
+    """Olay günlüğüne yeni bir kayıt ekler"""
+    entry = {
+        'time': time,
+        'student': student_id,
+        'station': station,
+        'action': action,
+        'icon': icon,
+    }
+    state['event_log'].append(entry)
+    if len(state['event_log']) > MAX_LOG_ENTRIES:
+        state['event_log'] = state['event_log'][-MAX_LOG_ENTRIES:]
+
 class Cafeteria:
     def __init__(self, env):
         self.env = env
-        self.server = simpy.Resource(env, config['NUM_SERVERS'])
-        self.cashier = simpy.Resource(env, config['NUM_CASHIERS'])
+        self.turnstile = simpy.Resource(env, config['NUM_TURNSTILES'])
+        self.server = simpy.PriorityResource(env, config['NUM_SERVERS'])
+        self.cashier = simpy.PriorityResource(env, config['NUM_CASHIERS'])
         self.seating = simpy.Resource(env, config['SEATING_CAPACITY'])
+        self.dish_return = simpy.Resource(env, config['NUM_DISH_RETURNS'])
 
-def student(env, cafeteria):
+def student(env, cafeteria, is_staff=False):
     state['total_in'] += 1
     
+    if is_staff:
+        state['total_staff'] += 1
+        sid = f"Per.{state['total_staff']}"
+        priority = 1 # Öncelikli
+        fee = 100.0 # Personel ücreti
+        icon_person = "👨‍🏫"
+    else:
+        state['total_student'] += 1
+        sid = f"Öğr.{state['total_student']}"
+        priority = 2 # Normal öncelik
+        fee = 50.0 # Öğrenci ücreti
+        icon_person = "👦"
+
+    # Dönem bazlı sayaç
+    factor, pname, _ = get_current_period(env.now)
+    state['period_counts'][pname] = state['period_counts'].get(pname, 0) + 1
+
+    add_event(env.now, sid, "Giriş", "Yemekhaneye geldi", icon_person)
+
+    # 0. Turnike Geçişi
+    state['tu_queue'] += 1
+    add_event(env.now, sid, "Turnike", "Turnikede bekliyor", "🔵")
+    with cafeteria.turnstile.request() as req:
+        yield req
+        state['tu_queue'] -= 1
+        state['tu_active'] += 1
+        yield env.timeout(0.05) # 3 saniye sürer
+        state['tu_active'] -= 1
+        add_event(env.now, sid, "Turnike", "Turnikeden geçti", "✅")
+
     # 1. Yemek Dağıtım Bankosu
     state['s_queue'] += 1
-    with cafeteria.server.request() as req:
+    add_event(env.now, sid, "Banko", "Sıraya girdi", "🔵")
+    with cafeteria.server.request(priority=priority) as req:
         yield req
         state['s_queue'] -= 1
         state['s_active'] += 1
+        add_event(env.now, sid, "Banko", "Hizmet başladı", "🟡")
         yield env.timeout(max(0.1, random.normalvariate(config['SERVING_MEAN'], config['SERVING_STD'])))
         state['s_active'] -= 1
+        add_event(env.now, sid, "Banko", "Yemeğini aldı", "✅")
 
     # 2. Kasa / Ödeme
     state['c_queue'] += 1
-    with cafeteria.cashier.request() as req:
+    add_event(env.now, sid, "Kasa", "Sıraya girdi", "🔵")
+    with cafeteria.cashier.request(priority=priority) as req:
         yield req
         state['c_queue'] -= 1
         state['c_active'] += 1
+        add_event(env.now, sid, "Kasa", "Ödeme başladı", "🟡")
         yield env.timeout(random.expovariate(1.0 / config['CASHIER_MEAN']))
         state['c_active'] -= 1
+        state['total_revenue'] += fee
+        add_event(env.now, sid, "Kasa", f"Ödeme tamamlandı ({fee}₺)", "✅")
 
     # 3. Masa / Oturma
     state['t_queue'] += 1
+    add_event(env.now, sid, "Masa", "Masa arıyor", "🔵")
     with cafeteria.seating.request() as req:
         yield req
         state['t_queue'] -= 1
         state['t_active'] += 1
+        add_event(env.now, sid, "Masa", "Oturdu, yiyor", "🍽️")
         yield env.timeout(random.expovariate(1.0 / config['EATING_MEAN']))
         state['t_active'] -= 1
-        
+        add_event(env.now, sid, "Masa", "Masayı boşalttı", "🪑")
+
+    # 4. Bulaşık / Tepsi Teslim
+    state['d_queue'] += 1
+    add_event(env.now, sid, "Bulaşık", "Tepsi bırakma sırasında", "🔵")
+    with cafeteria.dish_return.request() as req:
+        yield req
+        state['d_queue'] -= 1
+        state['d_active'] += 1
+        yield env.timeout(0.1) # 6 saniye sürer
+        state['d_active'] -= 1
+        add_event(env.now, sid, "Bulaşık", "Tepsiyi teslim etti", "✅")
+
     state['total_out'] += 1
+    add_event(env.now, sid, "Çıkış", "Yemekhaneden ayrıldı", "🔴")
+
+def break_manager(env, cafeteria):
+    """Personelin rastgele zamanlarda mola yapmasını sağlar"""
+    while True:
+        # Ortalama 45 dakikada bir mola olayı gerçekleşsin
+        yield env.timeout(random.expovariate(1.0 / 45.0))
+        
+        # %60 ihtimalle banko personeli, %40 ihtimalle kasiyer mola yapsın
+        if random.random() < 0.6:
+            if config['NUM_SERVERS'] > 1:
+                add_event(env.now, "SİSTEM", "BİLGİ", "Bir banko görevlisi molaya çıktı", "⚠️")
+                state['break_server'] += 1
+                with cafeteria.server.request(priority=0) as req: # En yüksek öncelik (VIP'den de yüksek)
+                    yield req
+                    yield env.timeout(5.0) # 5 dk mola
+                state['break_server'] -= 1
+                add_event(env.now, "SİSTEM", "BİLGİ", "Banko görevlisi moladan döndü", "✅")
+        else:
+            if config['NUM_CASHIERS'] > 1 or config['NUM_CASHIERS'] == 1:
+                add_event(env.now, "SİSTEM", "BİLGİ", "Bir kasiyer molaya çıktı", "⚠️")
+                state['break_cashier'] += 1
+                with cafeteria.cashier.request(priority=0) as req:
+                    yield req
+                    yield env.timeout(3.0) # Kasa molası 3 dk
+                state['break_cashier'] -= 1
+                add_event(env.now, "SİSTEM", "BİLGİ", "Kasiyer moladan döndü", "✅")
 
 def setup(env, cafeteria):
+    """Zaman dilimine göre dinamik varış hızıyla öğrenci ve personel üretir"""
     while True:
-        yield env.timeout(random.expovariate(1.0 / config['ARRIVAL_MEAN']))
-        env.process(student(env, cafeteria))
+        factor, _, _ = get_current_period(env.now)
+        # Çarpan büyükse → geliş aralığı kısalır (daha sık gelir)
+        adjusted_mean = config['ARRIVAL_MEAN'] / factor if factor > 0 else config['ARRIVAL_MEAN'] * 10
+        yield env.timeout(random.expovariate(1.0 / adjusted_mean))
+        
+        # %15 ihtimalle gelen kişi personel (VIP) olur
+        is_staff = random.random() < 0.15
+        env.process(student(env, cafeteria, is_staff=is_staff))
 
 def monitor_time(env):
     """Zamanı GUI'ye akıcı yansıtmak için bir takip süreci"""
     while True:
         state['current_time'] = env.now
+        # Aktif zaman dilimini güncelle
+        factor, pname, pcolor = get_current_period(env.now)
+        state['current_period_name'] = pname
+        state['current_period_color'] = pcolor
+        state['current_period_factor'] = factor
         # Tarihçeyi kaydet (her 1 dakikada bir)
         if len(state['history']['time']) == 0 or env.now - state['history']['time'][-1] >= 1.0:
             state['history']['time'].append(env.now)
@@ -133,6 +291,7 @@ def run_simulation():
     cafeteria = Cafeteria(env)
     
     env.process(setup(env, cafeteria))
+    env.process(break_manager(env, cafeteria))
     env.process(monitor_time(env))
     
     env.run(until=config['SIM_TIME'])
@@ -211,6 +370,8 @@ def create_dashboard():
         ("serving",   "🍲", "Yemek Bankosu"),
         ("cashier",   "💵", "Kasa Sırası"),
         ("seating",   "🪑", "Oturma Alanı"),
+        ("eventlog",  "📋", "Olay Günlüğü"),
+        ("periods",   "⏰", "Zaman Dilimleri"),
         ("stats",     "📈", "İstatistikler"),
     ]
 
@@ -268,6 +429,10 @@ def create_dashboard():
 
     status_label = tk.Label(topbar, text="● BEKLEMEDE", font=small_font, bg=CARD_BG, fg=ACCENT_ORANGE)
     status_label.pack(side="right", padx=20, pady=10)
+
+    # Aktif zaman dilimi göstergesi
+    period_label = tk.Label(topbar, text="", font=small_font, bg=CARD_BG, fg=TEXT_SECONDARY)
+    period_label.pack(side="right", padx=10, pady=10)
 
     # Progress Bar (Canvas ile)
     progress_frame = tk.Frame(main_area, bg=BG_DARK, height=8)
@@ -363,12 +528,16 @@ def create_dashboard():
     res_card = make_card(settings_inner, "🏗️ Kaynak Kapasiteleri", ACCENT_BLUE)
     res_card.pack(fill="x", pady=5, padx=5)
 
+    make_param_row(res_card, "🚪 Turnike Sayısı", "NUM_TURNSTILES", config['NUM_TURNSTILES'],
+                   "Girişteki kart okuma turnikeleri")
     make_param_row(res_card, "🍲 Banko Sayısı", "NUM_SERVERS", config['NUM_SERVERS'],
                    "Yemek dağıtım görevlisi sayısı")
     make_param_row(res_card, "💵 Kasa Sayısı", "NUM_CASHIERS", config['NUM_CASHIERS'],
                    "Ödeme noktası sayısı")
     make_param_row(res_card, "🪑 Oturma Kapasitesi", "SEATING_CAPACITY", config['SEATING_CAPACITY'],
                    "Toplam masa / sandalye sayısı")
+    make_param_row(res_card, "♻️ Bulaşık Teslim Noktası", "NUM_DISH_RETURNS", config['NUM_DISH_RETURNS'],
+                   "Yemek sonrası tepsi bırakma alanı")
     tk.Frame(res_card, height=8, bg=CARD_BG).pack()
 
     # ---- Süre Parametreleri Kartı ----
@@ -501,9 +670,9 @@ def create_dashboard():
         ov_canvas.itemconfig(ov_canvas.find_withtag("all")[0], width=event.width)
     ov_canvas.bind("<Configure>", _ov_resize)
 
-    # Üst satır: 3 mini kart (yan yana — bunlar küçük, sığar)
+    # Üst satır: 3 mini kart (yan yana)
     ov_top = tk.Frame(ov_inner, bg=BG_DARK)
-    ov_top.pack(fill="x", pady=(0, 10))
+    ov_top.pack(fill="x", pady=(0, 5))
 
     for i, (metric_title, metric_color, metric_key) in enumerate([
         ("Sisteme Giren", ACCENT_BLUE, "total_in"),
@@ -517,11 +686,29 @@ def create_dashboard():
         val_lbl.pack(pady=(0, 10))
         page_labels["overview"][metric_key] = val_lbl
 
+    # İkinci satır: VIP ve Finans
+    ov_mid = tk.Frame(ov_inner, bg=BG_DARK)
+    ov_mid.pack(fill="x", pady=(0, 10))
+
+    for i, (metric_title, metric_color, metric_key) in enumerate([
+        ("👦 Öğrenci", ACCENT_BLUE, "total_student"),
+        ("👨‍🏫 Personel (VIP)", ACCENT_PURPLE, "total_staff"),
+        ("💰 Toplam Ciro", ACCENT_YELLOW, "total_revenue"),
+    ]):
+        mini_card = tk.Frame(ov_mid, bg=CARD_BG, highlightbackground=CARD_BORDER, highlightthickness=1)
+        mini_card.pack(side="left", fill="both", expand=True, padx=(0 if i == 0 else 5, 0 if i == 2 else 5), pady=2)
+        tk.Label(mini_card, text=metric_title, font=small_font, bg=CARD_BG, fg=TEXT_SECONDARY).pack(pady=(10, 0))
+        val_lbl = tk.Label(mini_card, text="0", font=stat_font, bg=CARD_BG, fg=metric_color)
+        val_lbl.pack(pady=(0, 10))
+        page_labels["overview"][metric_key] = val_lbl
+
     # İstasyon kartları — ALT ALTA (dikey düzen)
     for i, (station_title, station_color, q_key, a_key, emoji_q, emoji_a) in enumerate([
+        ("🚪 Giriş Turnikeleri", ACCENT_PURPLE, "tu_queue", "tu_active", "🚶", "🟩"),
         ("🍲 Yemek Bankosu", ACCENT_BLUE, "s_queue", "s_active", "🚶", "👨‍🍳"),
         ("💵 Kasa & Ödeme", ACCENT_GREEN, "c_queue", "c_active", "🚶", "💳"),
         ("🪑 Oturma Alanı", ACCENT_YELLOW, "t_queue", "t_active", "🧍", "🍽️"),
+        ("♻️ Bulaşık Teslim", ACCENT_PINK, "d_queue", "d_active", "🚶", "🗑️"),
     ]):
         card = make_card(ov_inner, station_title, station_color)
         card.pack(fill="x", pady=4)
@@ -626,6 +813,13 @@ def create_dashboard():
     st_util_canvas.pack(fill="x", padx=20, pady=5)
     page_labels["seating"]["util_canvas"] = st_util_canvas
 
+    # Masa Grid Haritası (Canvas ile görsel masa yerleşimi)
+    tk.Frame(st_card, height=1, bg=CARD_BORDER).pack(fill="x", padx=15, pady=5)
+    tk.Label(st_card, text="🗺️ Masa Yerleşim Haritası:", font=body_font, bg=CARD_BG, fg=TEXT_SECONDARY).pack(anchor="w", padx=20)
+    seat_grid_canvas = tk.Canvas(st_card, height=120, bg="#1a1a2e", highlightthickness=0)
+    seat_grid_canvas.pack(fill="x", padx=20, pady=(5, 10))
+    page_labels["seating"]["grid_canvas"] = seat_grid_canvas
+
     # ==========================================
     # SAYFA 5: İSTATİSTİKLER
     # ==========================================
@@ -657,6 +851,92 @@ def create_dashboard():
     page_labels["stats"]["peak_cashier"] = make_metric(hist_card, "💵 Kasa Sırası En Yüksek:", "0", ACCENT_GREEN)
     page_labels["stats"]["peak_seating"] = make_metric(hist_card, "🪑 Masa Sırası En Yüksek:", "0", ACCENT_YELLOW)
     tk.Frame(hist_card, height=5, bg=CARD_BG).pack()
+
+    # ==========================================
+    # SAYFA 6: OLAY GÜNLÜĞÜ
+    # ==========================================
+    p_eventlog = tk.Frame(content_frame, bg=BG_DARK)
+    pages["eventlog"] = p_eventlog
+    page_labels["eventlog"] = {}
+
+    el_card = make_card(p_eventlog, "📋 Canlı Olay Günlüğü", ACCENT_PURPLE)
+    el_card.pack(fill="both", expand=True, pady=5)
+
+    tk.Label(el_card, text="Son olaylar aşağıda anlık olarak listelenir.", font=small_font, bg=CARD_BG, fg=TEXT_SECONDARY).pack(anchor="w", padx=20, pady=(0, 5))
+
+    # Scrollable event list
+    el_list_frame = tk.Frame(el_card, bg=CARD_BG)
+    el_list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+    el_canvas = tk.Canvas(el_list_frame, bg=CARD_BG, highlightthickness=0)
+    el_scrollbar = tk.Scrollbar(el_list_frame, orient="vertical", command=el_canvas.yview)
+    el_inner = tk.Frame(el_canvas, bg=CARD_BG)
+
+    el_inner.bind("<Configure>", lambda e: el_canvas.configure(scrollregion=el_canvas.bbox("all")))
+    el_canvas.create_window((0, 0), window=el_inner, anchor="nw")
+    el_canvas.configure(yscrollcommand=el_scrollbar.set)
+
+    el_canvas.pack(side="left", fill="both", expand=True)
+    el_scrollbar.pack(side="right", fill="y")
+
+    page_labels["eventlog"]["inner"] = el_inner
+    page_labels["eventlog"]["canvas"] = el_canvas
+    page_labels["eventlog"]["last_count"] = 0
+
+    # ==========================================
+    # SAYFA 7: ZAMAN DİLİMLERİ
+    # ==========================================
+    p_periods = tk.Frame(content_frame, bg=BG_DARK)
+    pages["periods"] = p_periods
+    page_labels["periods"] = {}
+
+    # Scrollable alan
+    pr_canvas_scroll = tk.Canvas(p_periods, bg=BG_DARK, highlightthickness=0)
+    pr_scrollbar = tk.Scrollbar(p_periods, orient="vertical", command=pr_canvas_scroll.yview)
+    pr_inner = tk.Frame(pr_canvas_scroll, bg=BG_DARK)
+
+    pr_inner.bind("<Configure>", lambda e: pr_canvas_scroll.configure(scrollregion=pr_canvas_scroll.bbox("all")))
+    pr_canvas_scroll.create_window((0, 0), window=pr_inner, anchor="nw")
+    pr_canvas_scroll.configure(yscrollcommand=pr_scrollbar.set)
+
+    pr_canvas_scroll.pack(side="left", fill="both", expand=True)
+    pr_scrollbar.pack(side="right", fill="y")
+
+    # Aktif dönem kartı
+    active_period_card = make_card(pr_inner, "⏰ Aktif Zaman Dilimi", ACCENT_YELLOW)
+    active_period_card.pack(fill="x", pady=5, padx=5)
+
+    page_labels["periods"]["active_name"] = tk.Label(active_period_card, text="—", font=heading_font, bg=CARD_BG, fg=ACCENT_GREEN)
+    page_labels["periods"]["active_name"].pack(anchor="w", padx=20, pady=5)
+    page_labels["periods"]["active_factor"] = tk.Label(active_period_card, text="Yoğunluk Çarpanı: —", font=body_font, bg=CARD_BG, fg=TEXT_SECONDARY)
+    page_labels["periods"]["active_factor"].pack(anchor="w", padx=20, pady=(0, 10))
+
+    # Tüm dönemlerin listesi
+    all_periods_card = make_card(pr_inner, "📅 Tüm Zaman Dilimleri", ACCENT_BLUE)
+    all_periods_card.pack(fill="x", pady=5, padx=5)
+
+    period_count_labels = {}
+    for start, end, factor, pname, pcolor in TIME_PERIODS:
+        row = tk.Frame(all_periods_card, bg=CARD_BG)
+        row.pack(fill="x", padx=15, pady=4)
+
+        tk.Label(row, text=f"{pname}", font=body_font, bg=CARD_BG, fg=pcolor).pack(side="left")
+        tk.Label(row, text=f"  ({start}-{end} dk, ×{factor})", font=small_font, bg=CARD_BG, fg=TEXT_SECONDARY).pack(side="left", padx=5)
+
+        cnt_lbl = tk.Label(row, text="0 öğrenci", font=body_font, bg=CARD_BG, fg=TEXT_PRIMARY)
+        cnt_lbl.pack(side="right")
+        period_count_labels[pname] = cnt_lbl
+
+    tk.Frame(all_periods_card, height=8, bg=CARD_BG).pack()
+    page_labels["periods"]["count_labels"] = period_count_labels
+
+    # Dönem ilerleme çubuğu
+    period_progress_card = make_card(pr_inner, "📊 Dönem İlerleme Çubuğu", ACCENT_ORANGE)
+    period_progress_card.pack(fill="x", pady=5, padx=5)
+
+    period_bar_canvas = tk.Canvas(period_progress_card, height=40, bg=PROGRESS_BG, highlightthickness=0)
+    period_bar_canvas.pack(fill="x", padx=20, pady=10)
+    page_labels["periods"]["bar_canvas"] = period_bar_canvas
 
     # ==========================================
     # SAYFA GEÇİŞ MEKANİZMASI
@@ -699,11 +979,18 @@ def create_dashboard():
         ns = int(config['NUM_SERVERS'])
         nc = int(config['NUM_CASHIERS'])
         sc = int(config['SEATING_CAPACITY'])
+        ntu = int(config.get('NUM_TURNSTILES', 2))
+        nd = int(config.get('NUM_DISH_RETURNS', 2))
 
         if state['sim_started']:
             time_label.config(text=f"⏱ Zaman: {ct:5.1f} / {sim_time} dk")
             ratio = ct / config['SIM_TIME'] if config['SIM_TIME'] > 0 else 0
             draw_progress_bar(progress_canvas, ratio, ACCENT_BLUE)
+            # Zaman dilimi göstergesi güncelle
+            period_label.config(
+                text=f"{state['current_period_name']}  (×{state['current_period_factor']})",
+                fg=state['current_period_color']
+            )
 
         active_page = current_page.get()
         show_page(active_page)
@@ -714,6 +1001,10 @@ def create_dashboard():
         ca = state['c_active']
         tq = state['t_queue']
         ta = state['t_active']
+        tuq = state.get('tu_queue', 0)
+        tua = state.get('tu_active', 0)
+        dq = state.get('d_queue', 0)
+        da = state.get('d_active', 0)
         ti = state['total_in']
         to_ = state['total_out']
         inside = ti - to_
@@ -723,11 +1014,19 @@ def create_dashboard():
         ol["total_in"].config(text=str(ti))
         ol["total_out"].config(text=str(to_))
         ol["inside"].config(text=str(inside))
+        ol["total_student"].config(text=str(state['total_student']))
+        ol["total_staff"].config(text=str(state['total_staff']))
+        ol["total_revenue"].config(text=f"{state['total_revenue']:.0f}₺")
 
-        for q_key, q_val, a_key, a_val, cap in [
-            ("s_queue", sq, "s_active", sa, ns),
-            ("c_queue", cq, "c_active", ca, nc),
-            ("t_queue", tq, "t_active", ta, sc),
+        bs = state.get('break_server', 0)
+        bc = state.get('break_cashier', 0)
+
+        for q_key, q_val, a_key, a_val, cap, b_val in [
+            ("tu_queue", tuq, "tu_active", tua, ntu, 0),
+            ("s_queue", sq, "s_active", sa, ns, bs),
+            ("c_queue", cq, "c_active", ca, nc, bc),
+            ("t_queue", tq, "t_active", ta, sc, 0),
+            ("d_queue", dq, "d_active", da, nd, 0),
         ]:
             ol[f"ov_{q_key}"].config(text=str(q_val))
             ol[f"ov_{a_key}"].config(text=str(a_val))
@@ -737,34 +1036,37 @@ def create_dashboard():
             if q_val > 20:
                 emoji_text += f"(+{q_val - 20})"
             emoji_text += "  |  "
-            emoji_text += f"{ea} " * a_val + "➖ " * (cap - a_val)
+            idle = max(0, cap - a_val - b_val)
+            emoji_text += f"{ea} " * a_val + "⚠️ " * b_val + "➖ " * idle
             ol[f"ov_emoji_{q_key}"].config(text=emoji_text)
 
         # ---- Banko Detay ----
         sl = page_labels["serving"]
-        sl["info"].config(text=f"Toplam Banko Sayısı: {ns}  |  Dağılım: Normal(μ={config['SERVING_MEAN']}, σ={config['SERVING_STD']})")
+        sl["info"].config(text=f"Toplam Banko: {ns} (Molada: {bs}) | Dağılım: Normal(μ={config['SERVING_MEAN']}, σ={config['SERVING_STD']})")
         sl["queue"].config(text=str(sq))
         sl["active"].config(text=f"{sa} / {ns}")
-        sl["idle"].config(text=str(ns - sa))
+        s_idle = max(0, ns - sa - bs)
+        sl["idle"].config(text=str(s_idle))
         q_emoji = ("🚶 " * min(sq, 30))
         if sq > 30:
             q_emoji += f"(+{sq - 30} kişi)"
         sl["emoji_q"].config(text=q_emoji if sq > 0 else "— Sıra yok —")
-        sl["emoji_a"].config(text=f"{'👨‍🍳 ' * sa}{'➖ ' * (ns - sa)}")
+        sl["emoji_a"].config(text=f"{'👨‍🍳 ' * sa}{'⚠️ ' * bs}{'➖ ' * s_idle}")
         if ns > 0:
             draw_progress_bar(sl["util_canvas"], sa / ns, ACCENT_BLUE, f"{sa}/{ns}")
 
         # ---- Kasa Detay ----
         cl = page_labels["cashier"]
-        cl["info"].config(text=f"Toplam Kasa Sayısı: {nc}  |  Dağılım: Üstel(λ=1/{config['CASHIER_MEAN']})")
+        cl["info"].config(text=f"Toplam Kasa: {nc} (Molada: {bc}) | Dağılım: Üstel(λ=1/{config['CASHIER_MEAN']})")
         cl["queue"].config(text=str(cq))
         cl["active"].config(text=f"{ca} / {nc}")
-        cl["idle"].config(text=str(nc - ca))
+        c_idle = max(0, nc - ca - bc)
+        cl["idle"].config(text=str(c_idle))
         cq_emoji = ("🚶 " * min(cq, 30))
         if cq > 30:
             cq_emoji += f"(+{cq - 30} kişi)"
         cl["emoji_q"].config(text=cq_emoji if cq > 0 else "— Sıra yok —")
-        cl["emoji_a"].config(text=f"{'💳 ' * ca}{'➖ ' * (nc - ca)}")
+        cl["emoji_a"].config(text=f"{'💳 ' * ca}{'⚠️ ' * bc}{'➖ ' * c_idle}")
         if nc > 0:
             draw_progress_bar(cl["util_canvas"], ca / nc, ACCENT_GREEN, f"{ca}/{nc}")
 
@@ -781,6 +1083,39 @@ def create_dashboard():
         tl["emoji_a"].config(text=f"{'🍽️ ' * min(ta, 15)}{'🪑 ' * (sc - ta)}")
         if sc > 0:
             draw_progress_bar(tl["util_canvas"], ta / sc, ACCENT_YELLOW, f"{ta}/{sc}")
+
+        # Masa grid haritası çizimi
+        if active_page == "seating":
+            gc = tl["grid_canvas"]
+            gc.delete("all")
+            gw = gc.winfo_width()
+            gh = gc.winfo_height()
+            if gw < 10:
+                gw = 600
+            if gh < 10:
+                gh = 120
+            cols = min(sc, 8)  # Max 8 sütun
+            rows = (sc + cols - 1) // cols
+            pad = 6
+            cell_w = (gw - pad * (cols + 1)) // cols
+            cell_h = (gh - pad * (rows + 1)) // rows
+            cell_w = min(cell_w, 60)
+            cell_h = min(cell_h, 40)
+            for i in range(sc):
+                r = i // cols
+                c = i % cols
+                x1 = pad + c * (cell_w + pad)
+                y1 = pad + r * (cell_h + pad)
+                x2 = x1 + cell_w
+                y2 = y1 + cell_h
+                if i < ta:
+                    fill_color = "#e94560"  # Dolu masa
+                    text_str = "🍽️"
+                else:
+                    fill_color = "#55efc4"  # Boş masa
+                    text_str = "🪑"
+                gc.create_rectangle(x1, y1, x2, y2, fill=fill_color, outline=CARD_BORDER, width=2)
+                gc.create_text((x1 + x2) // 2, (y1 + y2) // 2, text=text_str, font=small_font)
 
         # ---- İstatistikler ----
         stl = page_labels["stats"]
@@ -801,6 +1136,61 @@ def create_dashboard():
         stl["peak_serving"].config(text=str(peak_s))
         stl["peak_cashier"].config(text=str(peak_c))
         stl["peak_seating"].config(text=str(peak_t))
+
+        # ---- Olay Günlüğü Güncelleme ----
+        if active_page == "eventlog":
+            el = page_labels["eventlog"]
+            log_list = list(state['event_log'])
+            cur_count = len(log_list)
+            if cur_count != el["last_count"]:
+                # Eski widget'ları temizle
+                for w in el["inner"].winfo_children():
+                    w.destroy()
+                # Son 30 olayı göster (en yeni üstte)
+                for evt in reversed(log_list[-30:]):
+                    row = tk.Frame(el["inner"], bg=CARD_BG)
+                    row.pack(fill="x", padx=5, pady=1)
+                    tk.Label(row, text=f"{evt['icon']}", font=emoji_font, bg=CARD_BG, fg=TEXT_PRIMARY).pack(side="left", padx=(5, 3))
+                    tk.Label(row, text=f"[{evt['time']:5.1f} dk]", font=small_font, bg=CARD_BG, fg=ACCENT_YELLOW).pack(side="left", padx=(0, 5))
+                    tk.Label(row, text=f"Öğr.{evt['student']}", font=small_font, bg=CARD_BG, fg=ACCENT_BLUE).pack(side="left", padx=(0, 5))
+                    tk.Label(row, text=f"{evt['station']}: {evt['action']}", font=small_font, bg=CARD_BG, fg=TEXT_SECONDARY).pack(side="left")
+                el["last_count"] = cur_count
+                # Scroll'u en üste al
+                el["canvas"].yview_moveto(0)
+
+        # ---- Zaman Dilimleri Güncelleme ----
+        if active_page == "periods":
+            pl = page_labels["periods"]
+            pl["active_name"].config(
+                text=state['current_period_name'],
+                fg=state['current_period_color']
+            )
+            pl["active_factor"].config(
+                text=f"Yoğunluk Çarpanı: ×{state['current_period_factor']}  |  Varış Aralığı: {config['ARRIVAL_MEAN']/state['current_period_factor']:.2f} dk"
+            )
+            # Dönem bazlı sayaçları güncelle
+            for pname, lbl in pl["count_labels"].items():
+                cnt = state['period_counts'].get(pname, 0)
+                lbl.config(text=f"{cnt} öğrenci")
+            # Dönem ilerleme çubuğu çiz
+            bar_cv = pl["bar_canvas"]
+            bar_cv.delete("all")
+            bw = bar_cv.winfo_width()
+            bh = bar_cv.winfo_height()
+            if bw < 10:
+                bw = 600
+            if bh < 5:
+                bh = 40
+            total_time = config['SIM_TIME']
+            for start, end, factor, pname, pcolor in TIME_PERIODS:
+                x1 = int(bw * start / total_time)
+                x2 = int(bw * end / total_time)
+                bar_cv.create_rectangle(x1, 0, x2, bh, fill=pcolor, outline=CARD_BORDER)
+                mid_x = (x1 + x2) // 2
+                bar_cv.create_text(mid_x, bh // 2, text=f"×{factor}", fill="#1a1a2e", font=small_font)
+            # Aktif dönem işaretçisi (üçgen)
+            now_x = int(bw * min(ct, total_time) / total_time)
+            bar_cv.create_polygon(now_x - 5, 0, now_x + 5, 0, now_x, 8, fill="#ffffff", outline="")
 
         # Simülasyon durumu
         if state['is_finished']:

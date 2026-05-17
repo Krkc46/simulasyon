@@ -63,5 +63,16 @@ Projeyi komut satırındaki sıkıcı yazılardan ibaret olmaktan çıkarmak iç
 1. SimPy'ın "Realtime" kütüphanesi entegre edilerek zamanın bilgisayar saniyesiyle senkronize aktığı bir animasyonlu komut satırı izleyicisi yapıldı.
 2. Projenin son evresi olarak arka planda çoklu işlem (Threading) ile çalışan ve Python'ın kendi kütüphanesi olan **Tkinter** kullanan bir **Masaüstü Kullanıcı Arayüzü (GUI)** tasarlandı. Emojilerle hangi birimde kaç kişinin beklediği arayüz üzerinden eşzamanlı izlenebilir hale getirildi. 
 
-## 6. Sonuç ve Değerlendirme
+## 6. Sisteme Eklenen Yeni Özellikler ve Değişiklikler (v2.0)
+Proje üzerinde yapılan son güncellemeler ile sistemin gerçeğe uygunluğu artırılmış ve yeni izleme metrikleri eklenmiştir. Yapılan başlıca değişiklikler şunlardır:
+
+1. **Zaman Dilimi Yönetimi:** "Pik Yoğunluk", "Erken Saatler", "Kapanış" gibi farklı zaman dilimleri tanımlanmıştır. Bu sayede öğrenci geliş hızları (Arrival Mean) sabit kalmamış, saate göre dinamik olarak değişecek şekilde ayarlanmıştır.
+2. **Canlı Olay Günlüğü:** Her öğrencinin sisteme girişi, kuyruklara girmesi ve işlemleri arayüz üzerinden ikonlarla birlikte canlı bir şekilde loglanmaya başlanmıştır.
+3. **Akademik Personel (VIP) Önceliği:** Gelen kişilerin %15'inin akademik personel olduğu senaryosu eklenmiştir. Personeller, **SimPy PriorityResource (Öncelikli Kuyruk)** mekanizması kullanılarak banko ve kasa kuyruklarında öğrencilerin en önüne (VIP geçiş) alınmıştır.
+4. **Rastgele Mola Sistemi:** Banko ve kasa çalışanları yoruldukça rastgele zamanlarda 3-5 dakikalık molalara çıkmaktadır. Bu durum, hizmet noktalarında kısa süreli darboğazlara ve anlık kuyruk birikmelerine neden olarak simülasyona gerçekçi bir "hizmet kesintisi" boyutu katmıştır.
+5. **Finansal Ciro Takibi:** Öğrencilerden (50₺) ve personelden (100₺) farklı ücret tarifesi alınarak anlık ciro hesaplaması sisteme dahil edilmiştir.
+6. **Yeni Kaynak Noktaları (Turnike ve Bulaşık):** Modelin sınırları genişletilerek giriş kapısına **Turnikeler**, çıkışa ise **Tepsi/Bulaşık İade Noktası** eklenmiş ve kapasiteleri ayarlanabilir hale getirilmiştir.
+7. **Gelişmiş Oturma Görselleştirmesi:** Tkinter Canvas üzerinde masaların doluluk oranı (yeşil/kırmızı hücreler olarak) anlık bir grid haritası şeklinde çizilmektedir.
+
+## 7. Sonuç ve Değerlendirme
 Bu proje, yazılım destekli simülasyonların maliyet/fayda analizlerindeki gücünü ortaya koymuştur. Sadece bir satır parametre değiştirerek personellerin nasıl konumlandırılması gerektiği tahmin edilmiş ve gereksiz maliyetler teorik ortamda elimine edilmiştir. Oluşturulan genişletilebilir betik sayesinde, ilerde bu senaryoya "öğretmen öncelikli kuyruk" veya "fast-food ayrıcalığı" gibi yeni kurallar kolaylıkla eklenebilecektir.

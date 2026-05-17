@@ -62,6 +62,20 @@ Simülasyon, standart bir öğle arası olan **120 dakikalık** zaman diliminde 
 
 ---
 
+## 🆕 Son Değişimler ve Güncellemeler (v2.0)
+
+Projeye dinamizm katan yepyeni özellikler sisteme başarıyla entegre edilmiştir:
+
+1. **⏰ Zaman Dilimi Yönetimi:** "Pik Yoğunluk", "Erken Saatler" gibi farklı zaman dilimleri eklenerek simülasyon daha gerçekçi hale getirildi. 
+2. **📋 Canlı Olay Günlüğü:** Her öğrencinin sisteme girişi, kuyruklara girmesi ve işlemleri arayüz üzerinden canlı ve ikonlu loglarla izlenebilir.
+3. **👨‍🏫 VIP / Personel Önceliği:** Gelenlerin %15'i akademik personeldir. Personeller, **SimPy PriorityQueue** (Öncelikli Kuyruk) mantığıyla banko ve kasada öğrenci sıralarının önüne geçerler.
+4. **⚠️ Rastgele Mola Sistemi:** Banko ve kasa çalışanları yoruldukça rastgele kısa molalara çıkarak geçici hizmet kesintilerine (gerçek hayattaki gibi sürpriz darboğazlara) sebep olurlar.
+5. **💰 Finansal Ciro Takibi:** Öğrencilerden (50₺) ve personelden (100₺) alınan yemek ücretleri anlık olarak hesaplanıp Genel Bakış ekranında Ciro olarak yansıtılır.
+6. **🚪 Turnike ve ♻️ Bulaşık Noktaları:** Yemekhane sisteminin girişine "Turnikeler" ve çıkışına "Tepsi/Bulaşık İade Noktası" adında 2 yeni kaynak dahil edilerek kapasite ve kuyruk analizi genişletildi.
+7. **🗺️ Masa Grid Haritası:** Oturma alanındaki doluluk oranı, Tkinter Canvas üzerinde yeşil (boş) ve kırmızı (dolu) masalar şeklinde anlık çizilmektedir.
+
+---
+
 ## 🏗️ Sistem Mimarisi
 
 Yemekhane sistemi **3 aşamalı ardışık kuyruk** modelinden oluşur:
